@@ -19,6 +19,36 @@ SKIA_OUT_PATH = os.getenv(
     'SKIA_OUT_PATH', os.path.join(SKIA_PATH, 'out', 'Release')
 )
 
+# --- Sulphur fork: link against the project's prebuilt Skia.xcframework ---
+# On macOS we do NOT build our own Skia copy. We consume the exact same
+# universal, Vulkan-only libskia.a (m144, built by skia-build/) that the
+# Swift app statically links — the only way the SkSurface* handed over the
+# PyCapsule stays ABI-compatible across the boundary. The xcframework's
+# Headers/ tree (include/ + modules/) is the sole include root; the module
+# archives (svg/skparagraph/skshaper/skunicode) sit alongside libskia.a in
+# the slice dir and are linked together. Override the location with
+# SKIA_XCFRAMEWORK when building out-of-tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SKIA_XCFRAMEWORK = os.getenv(
+    'SKIA_XCFRAMEWORK',
+    os.path.join(
+        _HERE, os.pardir, 'SulphurXcodeDemo', 'packages', 'PyNucleantUI',
+        'Dependencies', 'Skia.xcframework',
+    ),
+)
+
+
+def _skia_macos_slice():
+    """Path to the macOS (universal) slice dir inside the xcframework."""
+    slices = sorted(glob.glob(os.path.join(SKIA_XCFRAMEWORK, 'macos-*')))
+    if not slices:
+        raise SystemExit(
+            f"no macos-* slice under {SKIA_XCFRAMEWORK} — build/install "
+            f"Skia.xcframework first (skia-build/build_skia_macos.py) or set "
+            f"SKIA_XCFRAMEWORK."
+        )
+    return slices[0]
+
 data_files = []
 if sys.platform == 'win32':
     DEFINE_MACROS = []  # doesn't work for cl.exe
@@ -57,19 +87,52 @@ if sys.platform == 'win32':
     ]
     data_files = [('Lib/site-packages', [os.path.join(SKIA_OUT_PATH, 'icudtl.dat')])]
 elif sys.platform == 'darwin':
+    SKIA_SLICE = _skia_macos_slice()
+    SKIA_HEADERS = os.path.join(SKIA_SLICE, 'Headers')
+    # The xcframework's public headers are not enough to *compile* against:
+    # several module public headers (e.g. SkResources.h, pulled in by
+    # SkSVGDOM.h) include Skia's internal "src/..." headers, which are not
+    # part of any public/shippable API. skia-python's own build resolves
+    # those against the full Skia source tree, so we do the same — this only
+    # affects compile-time includes; the actual binary still comes from the
+    # xcframework archives. Points at the co-located m144 checkout that
+    # produced this very xcframework (override with SKIA_SOURCE).
+    SKIA_SOURCE = os.getenv(
+        'SKIA_SOURCE', os.path.join(_HERE, os.pardir, 'skia-build', 'skia'),
+    )
+    # Generated headers (e.g. GrDriverBugWorkaroundsAutogen.h) live under the
+    # ninja out dir's gen/. The autogen one is also baked into SKIA_HEADERS,
+    # but include the gen dir too for any others.
+    _skia_gen = sorted(glob.glob(os.path.join(SKIA_SOURCE, 'out', '*', 'gen')))
+    SKIA_GEN = _skia_gen[-1] if _skia_gen else None
+    # Vulkan-only Ganesh: no GL, no Metal. The Vulkan backend links no
+    # Vulkan library — Skia resolves every entry point through the
+    # vkGetInstanceProcAddr the host app (MoltenVK, via CVulkan) hands its
+    # GrDirectContext, so there is nothing to link here.
     DEFINE_MACROS = [
         ('VERSION_INFO', __version__),
-        ('SK_GL', ''),
         ('SK_GANESH', '1'),
-        ('SK_METAL', ''),
+        ('SK_VULKAN', ''),
     ]
     LIBRARIES = [
         'dl',
     ]
-    EXTRA_OBJECTS = list(
-    ) + [os.path.join(SKIA_OUT_PATH, 'libsvg.a'), os.path.join(SKIA_OUT_PATH, 'libskia.a'),
-         os.path.join(SKIA_OUT_PATH, 'libskparagraph.a'), os.path.join(SKIA_OUT_PATH, 'libskshaper.a'),
-         os.path.join(SKIA_OUT_PATH, 'libskunicode_icu.a'), os.path.join(SKIA_OUT_PATH, 'libskunicode_core.a')]
+    # libskia.a is complete_static_lib (core + folded third_party: freetype,
+    # expat, png/jpeg/webp, zlib, icu data). The module archives carry only
+    # their own objects + exclusive deps (harfbuzz/icu into skunicode/
+    # skshaper/skparagraph). Link only the ones the build actually produced.
+    EXTRA_OBJECTS = [
+        os.path.join(SKIA_SLICE, name)
+        for name in (
+            'libsvg.a', 'libskia.a', 'libskparagraph.a', 'libskshaper.a',
+            'libskunicode_icu.a', 'libskunicode_core.a',
+        )
+        if os.path.isfile(os.path.join(SKIA_SLICE, name))
+    ]
+    if not any(o.endswith('libskia.a') for o in EXTRA_OBJECTS):
+        raise SystemExit(
+            f"libskia.a not found in {SKIA_SLICE} — rebuild Skia.xcframework."
+        )
     EXTRA_COMPILE_ARGS = [
         '-std=c++17',
         '-stdlib=libc++',
@@ -84,8 +147,6 @@ elif sys.platform == 'darwin':
         'AppKit',
         '-framework',
         'ApplicationServices',
-        '-framework',
-        'OpenGL',
     ]
 else:
     DEFINE_MACROS = [
@@ -144,11 +205,25 @@ class BuildExt(build_ext):
         build_ext.build_extensions(self)
 
 
-extension = Extension(
-    'skia',
-    sources=list(glob.glob(os.path.join('src', 'skia', '*.cpp'))),
-    include_dirs=[
-        # Path to pybind11 headers
+if sys.platform == 'darwin':
+    # Include order: the xcframework's public + module headers first (Skia's
+    # own layout — include/... and modules/.../include — plus the baked
+    # GrDriverBugWorkaroundsAutogen.h), then the Skia source checkout for the
+    # internal "src/..." headers that some module public headers leak, then
+    # the gen/ dir for any other generated headers. Vulkan backend headers
+    # come from include/third_party/vulkan.
+    INCLUDE_DIRS = [
+        get_pybind_include(),
+        get_pybind_include(user=True),
+        SKIA_HEADERS,
+        os.path.join(SKIA_HEADERS, "include/third_party/vulkan"),
+        SKIA_SOURCE,
+        os.path.join(SKIA_SOURCE, "include/third_party/vulkan"),
+    ]
+    if SKIA_GEN:
+        INCLUDE_DIRS.append(SKIA_GEN)
+else:
+    INCLUDE_DIRS = [
         get_pybind_include(),
         get_pybind_include(user=True),
         SKIA_PATH,
@@ -156,7 +231,12 @@ extension = Extension(
         os.path.join(SKIA_PATH, "third_party/externals/vulkan-headers/include"),
         os.path.join(SKIA_PATH, "include/third_party/vulkan"),
         os.path.join(SKIA_OUT_PATH, 'gen'),
-    ],
+    ]
+
+extension = Extension(
+    'skia',
+    sources=list(glob.glob(os.path.join('src', 'skia', '*.cpp'))),
+    include_dirs=INCLUDE_DIRS,
     define_macros=DEFINE_MACROS,
     libraries=LIBRARIES,
     extra_objects=EXTRA_OBJECTS,
