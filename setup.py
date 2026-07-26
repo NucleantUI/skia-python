@@ -49,6 +49,36 @@ def _skia_macos_slice():
         )
     return slices[0]
 
+
+def _is_ios_build():
+    """iOS wheels build under a macOS host Python (sys.platform=='darwin'), so
+    detect the iOS target from cibuildwheel's env instead."""
+    if sys.platform == 'ios':
+        return True
+    if 'iphone' in os.environ.get('PLATFORM_NAME', '').lower():
+        return True
+    if 'ios' in os.environ.get('_PYTHON_HOST_PLATFORM', '').lower():
+        return True
+    return False
+
+
+def _skia_ios_slice():
+    """The iOS device or simulator slice dir inside the xcframework, chosen from
+    the cibuildwheel target platform."""
+    host = os.environ.get('_PYTHON_HOST_PLATFORM', '').lower()
+    plat = os.environ.get('PLATFORM_NAME', '').lower()
+    is_sim = 'simulator' in host or 'iphonesimulator' in plat
+    slices = sorted(glob.glob(os.path.join(SKIA_XCFRAMEWORK, 'ios-*')))
+    cands = [s for s in slices
+             if ('simulator' in os.path.basename(s)) == is_sim]
+    if not cands:
+        raise SystemExit(
+            f"no {'simulator' if is_sim else 'device'} ios-* slice under "
+            f"{SKIA_XCFRAMEWORK} — build Skia.xcframework's iOS slices "
+            f"(skia-build/build_skia_ios.py) or set SKIA_XCFRAMEWORK."
+        )
+    return cands[0]
+
 data_files = []
 if sys.platform == 'win32':
     DEFINE_MACROS = []  # doesn't work for cl.exe
@@ -86,6 +116,54 @@ if sys.platform == 'win32':
         '/OPT:REF',
     ]
     data_files = [('Lib/site-packages', [os.path.join(SKIA_OUT_PATH, 'icudtl.dat')])]
+elif _is_ios_build():
+    # iOS: link the exact static libskia.a (+ module archives) from the
+    # xcframework's iOS slice — same ABI as the Swift app's Skia, so the
+    # SkSurface* handed over the PyCapsule stays compatible. Vulkan-only Ganesh
+    # (MoltenVK at runtime), same as macOS.
+    SKIA_SLICE = _skia_ios_slice()
+    SKIA_HEADERS = os.path.join(SKIA_SLICE, 'Headers')
+    SKIA_SOURCE = os.getenv(
+        'SKIA_SOURCE', os.path.join(_HERE, os.pardir, 'skia-build', 'skia'),
+    )
+    _skia_gen = sorted(glob.glob(os.path.join(SKIA_SOURCE, 'out', '*', 'gen')))
+    SKIA_GEN = _skia_gen[-1] if _skia_gen else None
+    DEFINE_MACROS = [
+        ('VERSION_INFO', __version__),
+        ('SK_GANESH', '1'),
+        ('SK_VULKAN', ''),
+    ]
+    LIBRARIES = ['dl']
+    EXTRA_OBJECTS = [
+        os.path.join(SKIA_SLICE, name)
+        for name in (
+            'libsvg.a', 'libskia.a', 'libskparagraph.a', 'libskshaper.a',
+            'libskunicode_icu.a', 'libskunicode_core.a',
+        )
+        if os.path.isfile(os.path.join(SKIA_SLICE, name))
+    ]
+    if not any(o.endswith('libskia.a') for o in EXTRA_OBJECTS):
+        raise SystemExit(
+            f"libskia.a not found in {SKIA_SLICE} — rebuild the Skia.xcframework "
+            f"iOS slices (skia-build/build_skia_ios.py)."
+        )
+    EXTRA_COMPILE_ARGS = [
+        '-std=c++17',
+        '-stdlib=libc++',
+        '-fvisibility=hidden',
+    ]
+    # Apple frameworks Skia's iOS CoreText fontmgr / codecs need. NOT AppKit /
+    # ApplicationServices (macOS-only). cibuildwheel's clang sets the iOS
+    # target/sysroot + min-version; Vulkan resolves via the app's MoltenVK.
+    EXTRA_LINK_ARGS = [
+        '-stdlib=libc++',
+        '-dead_strip',
+        '-framework', 'CoreFoundation',
+        '-framework', 'CoreGraphics',
+        '-framework', 'CoreText',
+        '-framework', 'ImageIO',
+        '-framework', 'UIKit',
+    ]
 elif sys.platform == 'darwin':
     SKIA_SLICE = _skia_macos_slice()
     SKIA_HEADERS = os.path.join(SKIA_SLICE, 'Headers')
@@ -205,7 +283,7 @@ class BuildExt(build_ext):
         build_ext.build_extensions(self)
 
 
-if sys.platform == 'darwin':
+if _is_ios_build() or sys.platform == 'darwin':
     # Include order: the xcframework's public + module headers first (Skia's
     # own layout — include/... and modules/.../include — plus the baked
     # GrDriverBugWorkaroundsAutogen.h), then the Skia source checkout for the
