@@ -24,7 +24,21 @@ environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 # just pass through whatever the invoking shell already has exported — set
 # SKIA_XCFRAMEWORK / SKIA_SOURCE before calling cibuildwheel, don't hardcode
 # machine-specific paths here.
+#
+# archs="all": cibuildwheel's default only auto-selects the host's native
+# arch (+ device, but only when the host itself is Apple Silicon). On an
+# Intel host that's just x86_64_iphonesimulator — need all 3 explicitly
+# (arm64_iphoneos, arm64_iphonesimulator, x86_64_iphonesimulator) to ship a
+# real device build alongside both simulator arches.
+[tool.cibuildwheel.ios]
+archs = ["all"]
+
 [tool.cibuildwheel.ios.environment]
 SKIA_XCFRAMEWORK = "$SKIA_XCFRAMEWORK"
 SKIA_SOURCE = "$SKIA_SOURCE"
 PIP_EXTRA_INDEX_URL = "https://pypi-index.psychowaspx.workers.dev/simple/"
+# cibuildwheel defaults to 13.0; the xcframework's arm64 slices need 17.0
+# (same floor as the rest of the app — see iOS deployment floor), so linking
+# against 13.0 just produces a mistagged wheel plus a wall of linker warnings
+# about objects built for a newer version than they're being linked against.
+IPHONEOS_DEPLOYMENT_TARGET = "17.0"
