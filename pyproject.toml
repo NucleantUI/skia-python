@@ -24,5 +24,7 @@ environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 # just pass through whatever the invoking shell already has exported — set
 # SKIA_XCFRAMEWORK / SKIA_SOURCE before calling cibuildwheel, don't hardcode
 # machine-specific paths here.
-[tool.cibuildwheel.ios]
-environment = { SKIA_XCFRAMEWORK = "$SKIA_XCFRAMEWORK", SKIA_SOURCE = "$SKIA_SOURCE", PIP_EXTRA_INDEX_URL = "https://pypi-index.psychowaspx.workers.dev/simple/" }
+[tool.cibuildwheel.ios.environment]
+SKIA_XCFRAMEWORK = "$SKIA_XCFRAMEWORK"
+SKIA_SOURCE = "$SKIA_SOURCE"
+PIP_EXTRA_INDEX_URL = "https://pypi-index.psychowaspx.workers.dev/simple/"

@@ -2,6 +2,7 @@ from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import os
 import sys
+import sysconfig
 import glob
 
 try:
@@ -50,24 +51,33 @@ def _skia_macos_slice():
     return slices[0]
 
 
+def _ios_platform_tag():
+    """The current build's platform tag, e.g. 'ios-13.0-x86_64-iphonesimulator'.
+    cibuildwheel's cross venv doesn't set _PYTHON_HOST_PLATFORM/PLATFORM_NAME (those
+    are Xcode/CPython-cross-build conventions, not ones cibuildwheel populates), but
+    sysconfig.get_platform() still resolves it correctly off the target interpreter
+    itself — it's what distutils uses internally to name the build/temp dirs."""
+    return (
+        os.environ.get('_PYTHON_HOST_PLATFORM')
+        or os.environ.get('PLATFORM_NAME')
+        or sysconfig.get_platform()
+    ).lower()
+
+
 def _is_ios_build():
     """iOS wheels build under a macOS host Python (sys.platform=='darwin'), so
-    detect the iOS target from cibuildwheel's env instead."""
+    detect the iOS target from the platform tag instead."""
     if sys.platform == 'ios':
         return True
-    if 'iphone' in os.environ.get('PLATFORM_NAME', '').lower():
-        return True
-    if 'ios' in os.environ.get('_PYTHON_HOST_PLATFORM', '').lower():
-        return True
-    return False
+    tag = _ios_platform_tag()
+    return 'ios' in tag or 'iphone' in tag
 
 
 def _skia_ios_slice():
     """The iOS device or simulator slice dir inside the xcframework, chosen from
-    the cibuildwheel target platform."""
-    host = os.environ.get('_PYTHON_HOST_PLATFORM', '').lower()
-    plat = os.environ.get('PLATFORM_NAME', '').lower()
-    is_sim = 'simulator' in host or 'iphonesimulator' in plat
+    the current build's platform tag."""
+    tag = _ios_platform_tag()
+    is_sim = 'simulator' in tag or 'iphonesimulator' in tag
     slices = sorted(glob.glob(os.path.join(SKIA_XCFRAMEWORK, 'ios-*')))
     cands = [s for s in slices
              if ('simulator' in os.path.basename(s)) == is_sim]
