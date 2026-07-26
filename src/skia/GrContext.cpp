@@ -301,8 +301,10 @@ py::class_<GrBackendSemaphore>(m, "GrBackendSemaphore")
 py::class_<GrBackendFormat>(m, "GrBackendFormat")
     .def(py::init<>())
     .def(py::init<const GrBackendFormat&>())
+#ifdef SK_GL
     .def_static("MakeGL", py::overload_cast<GrGLenum, GrGLenum>(&GrBackendFormats::MakeGL),
         py::arg("format"), py::arg("target"))
+#endif
 #ifdef SK_VULKAN
     .def_static("MakeVk", py::overload_cast<VkFormat, bool>(&GrBackendFormats::MakeVk),
         py::arg("format"), py::arg("willUseDRMFormatModifiers") = false)
@@ -324,7 +326,9 @@ py::class_<GrBackendFormat>(m, "GrBackendFormat")
     .def("backend", &GrBackendFormat::backend)
     .def("textureType", &GrBackendFormat::textureType)
     .def("channelMask", &GrBackendFormat::channelMask)
+#ifdef SK_GL
     .def("asGLFormat", &GrBackendFormats::AsGLFormat)
+#endif
 #ifdef SK_VULKAN
     .def("asVkFormat", &GrBackendFormats::AsVkFormat, py::arg("format"))
     .def("getVkYcbcrConversionInfo",
@@ -341,6 +345,7 @@ py::class_<GrBackendFormat>(m, "GrBackendFormat")
 
 py::class_<GrBackendTexture>(m, "GrBackendTexture")
     .def(py::init<>())
+#ifdef SK_GL
     .def(py::init(
         [] (int width, int height, skgpu::Mipmapped mipMapped, const GrGLTextureInfo& glInfo) {
             return GrBackendTextures::MakeGL(width, height,
@@ -348,6 +353,7 @@ py::class_<GrBackendTexture>(m, "GrBackendTexture")
         }),
         py::arg("width"), py::arg("height"), py::arg("mipMapped"),
         py::arg("glInfo"))
+#endif
 #ifdef SK_VULKAN
     .def(py::init(
         [] (int width, int height, const GrVkImageInfo& vkInfo) {
@@ -371,10 +377,12 @@ py::class_<GrBackendTexture>(m, "GrBackendTexture")
     .def("height", &GrBackendTexture::height)
     .def("hasMipmaps", &GrBackendTexture::hasMipmaps)
     .def("backend", &GrBackendTexture::backend)
+#ifdef SK_GL
     .def("getGLTextureInfo", &GrBackendTextures::GetGLTextureInfo,
         py::arg("info"))
     .def("glTextureParametersModified",
         &GrBackendTextures::GLTextureParametersModified)
+#endif
 #ifdef SK_VULKAN
     .def("getVkImageInfo", &GrBackendTextures::GetVkImageInfo,
         py::arg("info"))
@@ -441,6 +449,7 @@ py::class_<GrBackendSurfaceMutableState>(m, "GrBackendSurfaceMutableState",
 
 py::class_<GrBackendRenderTarget>(m, "GrBackendRenderTarget")
     .def(py::init<>())
+#ifdef SK_GL
     .def(py::init(
         [] (int width, int height, int sampleCnt, int stencilBits, const GrGLFramebufferInfo& glInfo) {
             return GrBackendRenderTargets::MakeGL(width, height,
@@ -451,6 +460,7 @@ py::class_<GrBackendRenderTarget>(m, "GrBackendRenderTarget")
     .def_static("MakeGL", &GrBackendRenderTargets::MakeGL,
         py::arg("width"), py::arg("height"), py::arg("sampleCnt"),
         py::arg("stencilBits"), py::arg("glInfo"))
+#endif
 #ifdef SK_VULKAN
     .def(py::init(
         [] (int width, int height, const GrVkImageInfo& vkInfo) {
@@ -488,6 +498,7 @@ py::class_<GrBackendRenderTarget>(m, "GrBackendRenderTarget")
     .def("stencilBits", &GrBackendRenderTarget::stencilBits)
     .def("backend", &GrBackendRenderTarget::backend)
     .def("isFramebufferOnly", &GrBackendRenderTarget::isFramebufferOnly)
+#ifdef SK_GL
     .def("getGLFramebufferInfo", &GrBackendRenderTargets::GetGLFramebufferInfo,
         R"docstring(
         If the backend API is GL, copies a snapshot of the GrGLFramebufferInfo
@@ -495,6 +506,7 @@ py::class_<GrBackendRenderTarget>(m, "GrBackendRenderTarget")
         false if the backend API is not GL.
         )docstring",
         py::arg("info"))
+#endif
 #ifdef SK_VULKAN
     .def("getVkImageInfo", &GrBackendRenderTargets::GetVkImageInfo,
         R"docstring(

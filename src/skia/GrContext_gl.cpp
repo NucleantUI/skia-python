@@ -6,6 +6,8 @@
 #include <include/gpu/ganesh/gl/glx/GrGLMakeGLXInterface.h>
 #endif
 
+#ifdef SK_GL
+
 void initGrContext_gl(py::module &m) {
 
 py::enum_<GrGLFormat>(m, "GrGLFormat")
@@ -71,3 +73,12 @@ py::class_<GrGLInterface, sk_sp<GrGLInterface>, SkRefCnt>(
     ;
 
 }
+
+#else  // !SK_GL
+
+// GL backend compiled out (this project is Vulkan-only). GrContext.cpp
+// calls initGrContext_gl(m) unconditionally, so keep the symbol as a no-op
+// — none of the GrGLInterface factories exist in a GL-less libskia.a.
+void initGrContext_gl(py::module &) {}
+
+#endif  // SK_GL

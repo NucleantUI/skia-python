@@ -1,0 +1,44 @@
+[build-system]
+# NOT numpy: it's a runtime dep only (install_requires); as a *build* requirement
+# it has no iOS wheel, so pip tries to build it from source for the iOS
+# cross-venv and hangs. The ext compiles fine without it (the numpy.distutils
+# import in setup.py is an optional try/except).
+requires = ["setuptools>=42", "wheel", "pybind11>=2.6"]
+build-backend = "setuptools.build_meta"
+
+[tool.cibuildwheel]
+build = "cp313-*"
+
+# macOS: the xcframework's macos-arm64_x86_64 slice was built with a minimum
+# target of 11.0 (arm64 has never supported anything older); cibuildwheel's
+# own default (10.9/10.13) is older than what's actually linked in, which
+# trips delocate-wheel's version-consistency check on repair.
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+# iOS: link the prebuilt Skia.xcframework's iOS slice (built by
+# skia-build/build_skia_ios.py) — no Skia rebuild needed. SKIA_SOURCE points at
+# the same m144 checkout for the internal "src/..." headers some module public
+# headers leak (compile-time only; the binary is the xcframework's libskia.a).
+# cibuildwheel runs iOS builds directly on the host (no container), so these
+# just pass through whatever the invoking shell already has exported — set
+# SKIA_XCFRAMEWORK / SKIA_SOURCE before calling cibuildwheel, don't hardcode
+# machine-specific paths here.
+#
+# archs="all": cibuildwheel's default only auto-selects the host's native
+# arch (+ device, but only when the host itself is Apple Silicon). On an
+# Intel host that's just x86_64_iphonesimulator — need all 3 explicitly
+# (arm64_iphoneos, arm64_iphonesimulator, x86_64_iphonesimulator) to ship a
+# real device build alongside both simulator arches.
+[tool.cibuildwheel.ios]
+archs = ["all"]
+
+[tool.cibuildwheel.ios.environment]
+SKIA_XCFRAMEWORK = "$SKIA_XCFRAMEWORK"
+SKIA_SOURCE = "$SKIA_SOURCE"
+PIP_EXTRA_INDEX_URL = "https://pypi-index.psychowaspx.workers.dev/simple/"
+# cibuildwheel defaults to 13.0; the xcframework's arm64 slices need 17.0
+# (same floor as the rest of the app — see iOS deployment floor), so linking
+# against 13.0 just produces a mistagged wheel plus a wall of linker warnings
+# about objects built for a newer version than they're being linked against.
+IPHONEOS_DEPLOYMENT_TARGET = "17.0"

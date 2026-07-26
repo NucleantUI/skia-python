@@ -1301,6 +1301,38 @@ surface
             otherwise, nullptr
         )docstring",
         py::arg("width"), py::arg("height"))
+    .def_static("FromCapsule",
+        [] (py::object capsule) -> sk_sp<SkSurface> {
+            if (!PyCapsule_IsValid(capsule.ptr(), "SkSurface")) {
+                throw py::value_error(
+                    "expected a PyCapsule named \"SkSurface\"");
+            }
+            auto* surface = reinterpret_cast<SkSurface*>(
+                PyCapsule_GetPointer(capsule.ptr(), "SkSurface"));
+            if (!surface) {
+                throw py::value_error("capsule holds a null SkSurface");
+            }
+            // Shared ownership: +1 ref while Python holds it. The canvas
+            // side (Sulphur SkiaCanvasBase / CSkia) stays the real owner of
+            // the render target and drives flush + final image layout.
+            return sk_ref_sp(surface);
+        },
+        R"docstring(
+        Adopt a live ``SkSurface*`` handed over from Swift through a
+        :py:class:`PyCapsule` named ``"SkSurface"`` (as produced by
+        Sulphur's ``SkiaCanvasBase.skia_surface_capsule()``).
+
+        No new surface is created; the returned :py:class:`Surface` borrows
+        the engine-owned render target and takes an extra ref for the
+        lifetime of the Python object. The engine keeps ownership, so the
+        Python side must NOT flush/submit — it only records draws on
+        :py:meth:`getCanvas`. Re-take the capsule after any resize; the old
+        surface is destroyed when the render node is rebuilt.
+
+        :param capsule: ``PyCapsule("SkSurface")`` wrapping an ``SkSurface*``.
+        :return: :py:class:`Surface` bound to the existing render target.
+        )docstring",
+        py::arg("capsule"))
     ;
 
 // Surfaces is a namespace
