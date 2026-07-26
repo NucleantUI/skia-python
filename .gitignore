@@ -159,3 +159,4 @@ Thumbs.db
 # Project specific
 submodule.txt
 tmp
+wheelhouse/
