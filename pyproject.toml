@@ -30,6 +30,34 @@ environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 # Intel host that's just x86_64_iphonesimulator — need all 3 explicitly
 # (arm64_iphoneos, arm64_iphonesimulator, x86_64_iphonesimulator) to ship a
 # real device build alongside both simulator arches.
+# Linux: link the prebuilt Skia static archives (built by
+# NucleantSkia/scripts/build_skia.py, the sibling-repo convention that script's
+# own docstring documents) — no Skia rebuild in the container. setup.py's Linux
+# branch is pure linking: it globs SKIA_PATH/out/Release/*.a and fails loudly
+# if libskia.a isn't there, it never invokes gn/ninja itself.
+#
+# SKIA_PATH is a pass-through (same idiom as SKIA_XCFRAMEWORK/SKIA_SOURCE
+# above) — set it before invoking cibuildwheel, don't hardcode a path here.
+# On a disk-constrained box, cibuildwheel's default host-root mount at /host
+# lets you point it at the real checkout (e.g.
+# SKIA_PATH=/host/path/to/skia-python/skia) instead of letting cibuildwheel
+# copy the whole ~9 GB skia/ submodule into the container — see
+# ../LINUX_SHARED_BUILD_PATTERN.md for the full recipe, including a "thin"
+# project mirror (rsync --exclude=/skia, anchored — an unanchored `skia`
+# pattern also matches src/skia/, the actual wrapper source, which is the one
+# directory that must NOT be excluded).
+[tool.cibuildwheel.linux]
+before-all = "dnf install -y fontconfig-devel expat-devel"
+# Unlike iOS (built directly on the host, no container), Linux builds run
+# inside a container — ambient host env vars aren't visible there unless
+# forwarded explicitly. Without this, `SKIA_PATH = "$SKIA_PATH"` below
+# expands to empty inside the container, not the host's value.
+environment-pass = ["SKIA_PATH"]
+
+[tool.cibuildwheel.linux.environment]
+SKIA_PATH = "$SKIA_PATH"
+CPATH = "$(python3 -c \"import sysconfig; print(sysconfig.get_path('include'))\")"
+
 [tool.cibuildwheel.ios]
 archs = ["all"]
 
