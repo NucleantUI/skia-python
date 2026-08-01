@@ -64,6 +64,15 @@ def _ios_platform_tag():
     ).lower()
 
 
+def _is_android_build():
+    """Android wheels cross-build under a Linux host Python
+    (sys.platform=='linux', same as a native Linux build), so the target has to
+    come from the platform tag — same approach as _is_ios_build() below."""
+    if sys.platform == 'android':
+        return True
+    return 'android' in _ios_platform_tag()
+
+
 def _is_ios_build():
     """iOS wheels build under a macOS host Python (sys.platform=='darwin'), so
     detect the iOS target from the platform tag instead."""
@@ -237,23 +246,73 @@ elif sys.platform == 'darwin':
         'ApplicationServices',
     ]
 else:
+    # Vulkan-only Ganesh, matching the macOS branch above (and
+    # NucleantSkia/Package.swift's CSkia target, which this extension shares
+    # a GrDirectContext/SkSurface with across a PyCapsule — same skia
+    # checkout/GN args, so the two must agree bit-for-bit or the shared
+    # Ganesh objects are ABI-incompatible between them): no SK_GL, no
+    # EGL/GL. scripts/build_Linux.sh's own default GN args build GL too,
+    # but NucleantSkia doesn't need it and the shared build shouldn't carry
+    # backend support one side of the capsule never uses.
     DEFINE_MACROS = [
         ('VERSION_INFO', __version__),
-        ('SK_GL', ''),
         ('SK_VULKAN', ''),
         ('SK_GANESH', '1'),
     ]
-    LIBRARIES = [
-        'dl',
-        'fontconfig',
-        'EGL',
-        'GL',
-        'expat',
-    ]
-    EXTRA_OBJECTS = list(
-    ) + [os.path.join(SKIA_OUT_PATH, 'libsvg.a'), os.path.join(SKIA_OUT_PATH, 'libskresources.a'), os.path.join(SKIA_OUT_PATH, 'libskia.a'),
-         os.path.join(SKIA_OUT_PATH, 'libskparagraph.a'), os.path.join(SKIA_OUT_PATH, 'libskshaper.a'),
-         os.path.join(SKIA_OUT_PATH, 'libskunicode_icu.a'), os.path.join(SKIA_OUT_PATH, 'libskunicode_core.a')]
+    if _is_android_build():
+        # Android is reached through this branch because bionic sets
+        # sys.platform == 'linux', but its system libraries differ:
+        #   * no fontconfig at all — Skia is built with
+        #     skia_use_fontconfig=false and uses its Android font manager
+        #     (see the __ANDROID__ branch in src/skia/Font.cpp).
+        #   * expat is Skia's own vendored libexpat.a from the Android GN
+        #     build (skia_use_system_expat=false), so it comes in with the
+        #     archive group below rather than as a system -l.
+        #   * pthread and rt do not exist as separate libraries; both are
+        #     part of bionic's libc.
+        # liblog is Android's, used by Skia's platform logging.
+        LIBRARIES = [
+            'dl',
+            'log',
+            'm',
+            'z',
+        ]
+    else:
+        LIBRARIES = [
+            'dl',
+            'fontconfig',
+            'expat',
+            'pthread',
+            'rt',
+            'm',
+            'z',
+        ]
+    # Skia's GN build splits into many static archives (freetype, harfbuzz,
+    # icu, libjpeg/png/webp, etc. all bundled rather than resolved from the
+    # system — skia_use_system_*=false for everything but fontconfig/expat)
+    # rather than one complete_static_lib like the macOS xcframework slice
+    # above. Link whatever the build actually produced instead of a
+    # hardcoded list, since which archives that is can shift with GN args.
+    #
+    # --start-group/--end-group: the archives reference each other
+    # circularly (e.g. libskia.a <-> libsvg.a) — GNU ld's default single
+    # left-to-right pass over a flat object/archive list can leave some of
+    # those cross-archive symbols unresolved (the .so still builds since
+    # `-shared` doesn't require full resolution, but importing it in Python
+    # then fails with "undefined symbol" the first time something in the
+    # unpulled .o is actually needed, e.g. SkParse::FindNamedColor).
+    # Wrapping in a group makes ld retry archives until nothing new
+    # resolves, closing exactly that gap.
+    EXTRA_OBJECTS = (
+        ['-Wl,--start-group']
+        + sorted(glob.glob(os.path.join(SKIA_OUT_PATH, '*.a')))
+        + ['-Wl,--end-group']
+    )
+    if not any(o.endswith('libskia.a') for o in EXTRA_OBJECTS):
+        raise SystemExit(
+            f"libskia.a not found in {SKIA_OUT_PATH} — run "
+            f"scripts/build_skia.py (or gn gen + ninja) first."
+        )
     EXTRA_COMPILE_ARGS = [
         '-std=c++17',
         '-fvisibility=hidden',

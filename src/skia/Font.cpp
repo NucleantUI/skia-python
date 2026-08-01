@@ -15,7 +15,13 @@
 #include "include/ports/SkFontMgr_mac_ct.h"
 #endif
 
-#ifdef __linux__
+// __ANDROID__ must be tested before __linux__: bionic defines both, so an
+// Android build would otherwise take the fontconfig path, which Android has no
+// equivalent of. Its font manager reads /system/etc/fonts.xml instead.
+#if defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#elif defined(__linux__)
 #include "include/ports/SkFontMgr_fontconfig.h"
 #include "include/ports/SkFontScanner_FreeType.h"
 #endif
@@ -35,6 +41,9 @@ bool g_factory_called = false;
 static sk_sp<SkFontMgr> fontmgr_factory() {
 #if defined(__APPLE__)
   return SkFontMgr_New_CoreText(nullptr);
+#elif defined(__ANDROID__)
+  // NULL custom fonts == system fonts only.
+  return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
 #elif defined(__linux__)
   return SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #elif defined(_WIN32)
